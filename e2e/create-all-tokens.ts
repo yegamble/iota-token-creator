@@ -32,12 +32,21 @@ async function checkApiHealth(
   console.log(`[health] Waiting for API at ${apiUrl}/healthz …`);
   for (let i = 0; i < maxRetries; i++) {
     try {
-      const resp = await fetch(`${apiUrl}/healthz`);
+      const resp = await fetch(`${apiUrl}/healthz`, {
+        signal: AbortSignal.timeout(10_000),
+      });
       if (resp.ok) {
         console.log("[health] API is ready.");
         return;
       }
-    } catch {}
+    } catch (err) {
+      if (i === maxRetries - 1) {
+        console.error(
+          "[health] Last attempt error:",
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
     if (i < maxRetries - 1) {
       await new Promise((r) => setTimeout(r, intervalMs));
     }

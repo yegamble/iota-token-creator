@@ -27,8 +27,34 @@ export function getExplorerUrl(explorerBase: string, digest: string): string {
 export async function fundFromFaucet(
   faucetUrl: string,
   address: string,
+  maxRetries = 3,
 ): Promise<void> {
-  await requestIotaFromFaucetV0({ host: faucetUrl, recipient: address });
+  let lastError: unknown;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      await requestIotaFromFaucetV0({ host: faucetUrl, recipient: address });
+      return;
+    } catch (err) {
+      lastError = err;
+      if (attempt < maxRetries - 1) {
+        const delayMs = 2000 * 2 ** attempt;
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+  }
+  try {
+    const resp = await fetch(`${faucetUrl}/gas`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ FixedAmountRequest: { recipient: address } }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!resp.ok) {
+      throw new Error(`Faucet HTTP fallback returned ${resp.status}`);
+    }
+  } catch (fallbackErr) {
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  }
 }
 
 export async function waitForBalance(
@@ -50,7 +76,7 @@ export async function waitForBalance(
   );
 }
 
-export async function publishPackage(
+async function executePublish(
   client: IotaClient,
   keypair: Keypair,
   compiled: CompileResponse,
@@ -64,13 +90,37 @@ export async function publishPackage(
   });
   tx.transferObjects([upgradeCap], address);
 
-  const result = await client.signAndExecuteTransaction({
-    transaction: tx,
-    signer: keypair,
-    options: { showEffects: true, showObjectChanges: true },
-  });
+  const result = await Promise.race([
+    client.signAndExecuteTransaction({
+      transaction: tx,
+      signer: keypair,
+      options: { showEffects: true, showObjectChanges: true },
+    }),
+    new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error("Transaction timed out after 60s")),
+        60_000,
+      ),
+    ),
+  ]);
 
   await client.waitForTransaction({ digest: result.digest });
 
   return result.digest;
+}
+
+export async function publishPackage(
+  client: IotaClient,
+  keypair: Keypair,
+  compiled: CompileResponse,
+): Promise<string> {
+  try {
+    return await executePublish(client, keypair, compiled);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("timed out")) {
+      return await executePublish(client, keypair, compiled);
+    }
+    throw err;
+  }
 }

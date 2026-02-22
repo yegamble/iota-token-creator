@@ -67,7 +67,9 @@ describe("compileToken", () => {
       json: async () => ({ error: "invalid request body", details: "missing name" }),
     });
 
-    await expect(compileToken(API_URL, validRequest)).rejects.toThrow("invalid request body");
+    await expect(compileToken(API_URL, validRequest)).rejects.toThrow(
+      "invalid request body: missing name",
+    );
   });
 
   it("throws with API error message on 422 response", async () => {
@@ -77,7 +79,21 @@ describe("compileToken", () => {
       json: async () => ({ error: "compilation failed", details: "unknown type" }),
     });
 
-    await expect(compileToken(API_URL, validRequest)).rejects.toThrow("compilation failed");
+    await expect(compileToken(API_URL, validRequest)).rejects.toThrow(
+      "compilation failed: unknown type",
+    );
+  });
+
+  it("includes AbortSignal timeout in fetch options", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => validResponse,
+    });
+
+    await compileToken(API_URL, validRequest);
+
+    const [, init] = mockFetch.mock.calls[0];
+    expect(init.signal).toBeDefined();
   });
 
   it("throws generic error when response body is not JSON", async () => {
